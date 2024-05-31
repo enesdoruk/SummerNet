@@ -511,7 +511,7 @@ def main():
             raise ValueError(
                 f"`--max_source_length` is set to {data_args.max_source_length}, but the model only has"
                 f" {model.config.max_position_embeddings} position encodings. Consider either reducing"
-                f" `--max_source_length` to {model.config.max_position_embeddings} or to automatically resize the"
+                f" `--max_source_length` tFo {model.config.max_position_embeddings} or to automatically resize the"
                 " model's position encodings by passing `--resize_position_embeddings`."
             )
 
@@ -570,7 +570,7 @@ def main():
     )
 
     # Metric
-    metric = evaluate.load("rouge")
+    metric = evaluate.load("rouge", "bertscore")
 
     def postprocess_text(preds, labels):
         preds = [pred.strip() for pred in preds]

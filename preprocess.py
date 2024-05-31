@@ -7,20 +7,12 @@ from transformers import PreTrainedTokenizerBase
 from nltk import sent_tokenize
 from rouge_score import rouge_scorer
 from transformers import AutoTokenizer
-
-dataset = datasets.load_dataset('cnn_dailymail', name='3.0.0')
-
-src_text_column_name, tgt_text_column_name = "article", "highlights"
-max_source_length, max_target_length = 1024, 128
-n_proc = 40
-
-# Since bos_token is used as the beginning of target sequence,
-# we use mask_token to represent the beginning of each sentence.
-bosent_token = "<mask>"
-bosent_token_id = 50264
-
-rouge_scorer = rouge_scorer.RougeScorer(['rougeLsum'], use_stemmer=True)
-
+import argparse
+from datasets import Dataset
+Dataset.cleanup_cache_files
+import ipdb
+import warnings
+warnings.filterwarnings('ignore')
 
 def convert_to_features(
         examples: Any,
@@ -33,7 +25,8 @@ def convert_to_features(
 ):
     inputs, targets = [], []
     all_sent_rouge_scores = []
-    for i in range(len(examples[src_text_column_name])):
+    
+    for i in range(len(examples[src_text_column_name])): 
         if examples[src_text_column_name][i] is not None and examples[tgt_text_column_name][i] is not None:
             input_sentences = sent_tokenize(examples[src_text_column_name][i])
             target_sentences = examples[tgt_text_column_name][i].strip()
@@ -45,7 +38,7 @@ def convert_to_features(
             targets.append(target_sentences.replace('\n', ' ').replace('  ', ' '))
             all_sent_rouge_scores.append(rouge_scores)
     model_inputs = tokenizer(inputs, max_length=max_source_length, padding=padding, truncation=True)
-
+    
     # replace bos_token_id at the begining of document with bosent_token_id
     for i in range(len(model_inputs['input_ids'])):
         model_inputs['input_ids'][i][0] = bosent_token_id
@@ -96,28 +89,68 @@ def convert_to_features(
     return model_inputs
 
 
-tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large", use_fast=False)
+def get_args():
+    parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
+    parser.add_argument('--dataset', '-d', type=str, default='plos', help='dataset_name')
+    parser.add_argument('--tokenizer', '-t', type=str, default='facebook/bart-large', help='tokenizer name')
 
-convert_to_features = partial(
-    convert_to_features,
-    tokenizer=tokenizer,
-    padding='max_length',
-    max_source_length=max_source_length,
-    max_target_length=max_target_length,
-    src_text_column_name=src_text_column_name,
-    tgt_text_column_name=tgt_text_column_name,
-)
-dataset = dataset.map(
-    convert_to_features,
-    batched=True,
-    num_proc=n_proc,
-)
+    return parser.parse_args()
 
-cols_to_keep = ["input_ids", "attention_mask", "labels", "info_distribution", "sentence_bos_index", "sent_id"]
-dataset.set_format(columns=cols_to_keep)
 
-for split in ['train', 'validation', 'test']:
-    with open(f'data/{split}.json', 'w') as outfile:
-        for i, example in enumerate(dataset[split]):
-            json_string = json.dumps(example)
-            outfile.write(json_string + '\n')
+if __name__ == "__main__":
+    args = get_args()
+    
+    # if args.dataset == 'plos':
+        # dataset = datasets.load_dataset("parquet", data_files={'train': ['data/plos/train/0000.parquet', 'data/plos/train/0001.parquet'],
+        #                                                     'validation' : 'data/plos/validation/0000.parquet',
+        #                                                     'test': 'data/plos/test/0000.parquet'})
+    
+    # elif args.dataset == 'elife':
+        # dataset = datasets.load_dataset("parquet", data_files={'train': 'data/elife/train/0000.parquet',
+        #                                                     'validation' : 'data/elife/validation/0000.parquet',
+        #                                                     'test': 'data/elife/test/0000.parquet'})
+
+    # else:
+    #     SystemExit("Dataset unavaliable")
+
+    dataset = datasets.load_dataset("tomasg25/scientific_lay_summarisation", f"{args.dataset}")
+
+    src_text_column_name, tgt_text_column_name = "article", "summary"
+    max_source_length, max_target_length = 1024, 128
+    n_proc = 16
+    
+
+    # Since bos_token is used as the beginning of target sequence,
+    # we use mask_token to represent the beginning of each sentence.
+    bosent_token = "<mask>"
+    bosent_token_id = 50264
+
+    rouge_scorer = rouge_scorer.RougeScorer(['rougeLsum'], use_stemmer=True)
+
+    tokenizer = AutoTokenizer.from_pretrained(f"{args.tokenizer}", use_fast=False)
+
+    convert_to_features = partial(
+        convert_to_features,
+        tokenizer=tokenizer,
+        padding='max_length',
+        max_source_length=max_source_length,
+        max_target_length=max_target_length,
+        src_text_column_name=src_text_column_name,
+        tgt_text_column_name=tgt_text_column_name,
+    )
+    
+    
+    dataset = dataset.map(
+        convert_to_features,
+        batched=True,
+        num_proc=n_proc,
+    )
+
+    cols_to_keep = ["input_ids", "attention_mask", "labels", "info_distribution", "sentence_bos_index", "sent_id"]
+    dataset.set_format(columns=cols_to_keep)
+    
+    for split in ['train', 'validation', 'test']:
+        with open(f'data/{args.dataset}/{split}.json', 'w') as outfile:
+            for i, example in enumerate(dataset[split]):
+                json_string = json.dumps(example)
+                outfile.write(json_string + '\n')

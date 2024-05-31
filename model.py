@@ -283,7 +283,131 @@ class BartAttention(nn.Module):
 
         return attn_output, attn_weights_reshaped, past_key_value
 
+class LSS(nn.Module):
+    def __init__(self, in_dim, scale):
+        super().__init__()
+        
+        self.indim = in_dim
+        self.scale = scale
+        
+        self.lin1 = nn.Linear(in_features=self.indim, out_features=self.indim*self.scale)
+        self.lin2 = nn.Linear(in_features=in_dim, out_features=self.indim*self.scale)
+        
+        self.layer_norm = nn.LayerNorm(self.indim*self.scale)
+        
+        self.silu1 = nn.SiLU()
+        self.silu2 = nn.SiLU()
+        
+        self.ssm_enc = nn.Linear(in_features=self.indim*self.scale, out_features=self.indim / (self.scale*2))
+        self.relu = nn.ReLU()
+        self.ssm_dec = nn.Linear(in_features=self.indim / (self.scale*2), out_features=self.indim*self.scale)
+        
+        self.lin3 = nn.Linear(in_features=self.indim*self.scale, out_features=self.indim)
+        
+    def forward(self, x):
+        import pdb; pdb.set_trace()
+        
+        out_lin1 = self.lin1(x)
+        out_lin1_act = self.silu1(out_lin1)
+        out_ssm_enc = self.ssm_enc(out_lin1_act)
+        out_ssm_enc_act = self.relu(out_ssm_enc)
+        out_ssm_dec = self.ssm_dec(out_ssm_enc_act)
+        
+        out_lin2 = self.lin2(x)
+        out_lin2_act = self.silu2(out_lin2)
+        
+        att = out_ssm_dec * out_lin2_act
+        out = self.lin3(att)
+        
+        return out
+        
+       
 
+def dct(x, norm=None):
+    """
+    Discrete Cosine Transform, Type II (a.k.a. the DCT)
+    :param x: the input signal
+    :param norm: the normalization, None or 'ortho'
+    :return: the DCT-II of the signal over the last dimension
+    """
+
+    x_shape = x.shape
+    N = x_shape[-1]
+    x = x.contiguous().view(-1, N)
+
+    v = torch.cat([x[:, ::2], x[:, 1::2].flip([1])], dim=1)
+
+    Vc = torch.fft.fft(v, dim=1)
+
+
+    k = - torch.arange(N, dtype=x.dtype, device=x.device)[None, :] * np.pi / (2 * N)
+    W_r = torch.cos(k)
+    W_i = torch.sin(k)
+
+    V = Vc.real * W_r - Vc.imag * W_i
+
+    if norm == 'ortho':
+        V[:, 0] /= np.sqrt(N) * 2
+        V[:, 1:] /= np.sqrt(N / 2) * 2
+
+    V = 2 * V.view(*x_shape)
+
+    return V
+
+
+def idct(X, norm=None):
+    """
+    The inverse to DCT-II, which is a scaled Discrete Cosine Transform, Type III
+    Our definition of idct is that idct(dct(x)) == x
+    For the meaning of the parameter `norm`, see:
+    https://docs.scipy.org/doc/scipy-0.14.0/reference/generated/scipy.fftpack.dct.html
+    :param X: the input signal
+    :param norm: the normalization, None or 'ortho'
+    :return: the inverse DCT-II of the signal over the last dimension
+    """
+
+    x_shape = X.shape
+    N = x_shape[-1]
+
+    X_v = X.contiguous().view(-1, x_shape[-1]) / 2
+    if norm == 'ortho':
+        X_v[:, 0] *= np.sqrt(N) * 2
+        X_v[:, 1:] *= np.sqrt(N / 2) * 2
+
+    k = torch.arange(x_shape[-1], dtype=X.dtype, device=X.device)[None, :] * np.pi / (2 * N)
+    W_r = torch.cos(k)
+    W_i = torch.sin(k)
+
+    V_t_r = X_v
+    V_t_i = torch.cat([X_v[:, :1] * 0, -X_v.flip([1])[:, :-1]], dim=1)
+
+    V_r = V_t_r * W_r - V_t_i * W_i
+    V_i = V_t_r * W_i + V_t_i * W_r
+
+    V = torch.cat([V_r.unsqueeze(2), V_i.unsqueeze(2)], dim=2)
+    V = torch.view_as_complex(V)
+
+    v = torch.fft.ifft(V, dim=1).real
+    x = v.new_zeros(v.shape)
+    x[:, ::2] += v[:, :N - (N // 2)]
+    x[:, 1::2] += v.flip([1])[:, :N // 2]
+
+    return x.view(*x_shape) 
+
+def dc_transform(x, dct_lowpass, dct_percentage):
+        # cufft doesn't accept fp16
+        x = x.type(torch.float32)
+        # dct along T dimension
+        x_dct = dct(x.transpose(0,2), norm='ortho').transpose(0,2)
+        T, B, C = x_dct.size()
+
+        # feel free to play with any method here
+        if dct_lowpass:
+            x_dct = x_dct[:math.ceil(T*dct_percentage), :, :]
+
+        return idct(x_dct.transpose(0,2), norm='ortho').transpose(0,2).type(torch.half)
+    
+    
 class BartEncoderLayer(nn.Module):
     def __init__(self, config: BartConfig):
         super().__init__()
@@ -297,6 +421,7 @@ class BartEncoderLayer(nn.Module):
         self.dropout = config.dropout
         self.activation_fn = ACT2FN[config.activation_function]
         self.activation_dropout = config.activation_dropout
+        # self.lss = LSS(self.embed_dim , 4)
         self.fc1 = nn.Linear(self.embed_dim, config.encoder_ffn_dim)
         self.fc2 = nn.Linear(config.encoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
@@ -329,6 +454,7 @@ class BartEncoderLayer(nn.Module):
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
+        # hidden_states = self.lss(hidden_states)
 
         residual = hidden_states
         hidden_states = self.activation_fn(self.fc1(hidden_states))
@@ -337,6 +463,7 @@ class BartEncoderLayer(nn.Module):
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
+        # hidden_states = dc_transform(hidden_states, 0.2, 0.3)
 
         if hidden_states.dtype == torch.float16 and (
                 torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
@@ -858,6 +985,7 @@ class BartEncoder(BartPretrainedModel):
 
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[1],)
+                
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)

@@ -1,13 +1,13 @@
-CUDA_VISIBLE_DEVICES=0 python run.py \
+CUDA_VISIBLE_DEVICES=0,1 python run.py \
     --model_name_or_path checkpoints/season_cnndm \
     --tokenizer_name facebook/bart-large \
     --do_predict \
-    --train_file data/train.json \
-    --validation_file data/validation.json \
-    --test_file data/test.json \
+    --train_file data/elife/train.json \
+    --validation_file data/elife/validation.json \
+    --test_file data/elife/test.json \
     --output_dir outputs/inference \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 8 \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 \
     --num_beams 5 \
     --max_length 256 \
     --min_length 20 \

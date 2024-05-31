@@ -1,24 +1,25 @@
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python run.py \
-    --model_name_or_path facebook/bart-large \
+
+CUDA_VISIBLE_DEVICES=0 python run.py \
+    --model_name_or_path facebook/bart-base \
     --do_train \
     --do_eval \
     --do_predict \
-    --train_file data/train.json \
-    --validation_file data/validation.json \
-    --test_file data/test.json \
+    --train_file data/elife/train.json \
+    --validation_file data/elife/validation.json \
+    --test_file data/elife/test.json \
     --output_dir outputs/train \
-    --per_device_train_batch_size 6 \
+    --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 2 \
-    --per_device_eval_batch_size 6 \
-    --num_train_epochs 10 \
+    --per_device_eval_batch_size 1 \
+    --num_train_epochs 5 \
     --learning_rate 3e-5 \
     --warmup_steps 1500 \
     --weight_decay 0.01 \
-    --max_grad_norm 0.1 \
+    --max_grad_norm 0.01 \
     --metric_for_best_model rougeLsum \
     --evaluation_strategy epoch \
     --save_strategy epoch \
-    --fp16 true \
+    --fp16 false \
     --bosent_token_id 50264 \
     --encoder_loss_ratio 1.0 \
     --encoder_label_smoothing 0.1 \
